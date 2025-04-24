@@ -3,7 +3,7 @@
 ## Assigning roles:
 1. Github repository:
  - README with brief description
-- data folder (scrape data with SQL) --> Lucas
+- data folder (scrape data with SQL) --> Lucas (I will do this)
 - documentation folder with Python code and ER diagram
 - figures folder with plots and tables
 - scripts folder with SQL and Python --> Lucas/
