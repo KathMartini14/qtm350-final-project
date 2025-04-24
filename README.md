@@ -7,7 +7,7 @@
 - documentation folder with Python code and ER diagram
 - figures folder with plots and tables
 - scripts folder with SQL and Python --> Lucas/
-3. Quarto report
+3. Quarto report (Katherine and Joyce)
 - Title, Introduction
 - Data description
 - Data analysis
