@@ -22,7 +22,7 @@ To run the code, you can either clone the repository into your own Github accoun
 - README with brief description --> Lucas
 - data folder (scrape data with SQL) --> Lucas
 - documentation folder with Python code and ER diagram --> Katherine/Joyce
-- figures folder with plots and tables --> Katherine/Caleb
-- scripts folder with SQL and Python --> Lucas/Joyce
+- figures folder with plots and tables --> Katherine/Joyce
+- scripts folder with SQL and Python --> Joyce/Lucas
 
-2. Quarto report including Title/Intro, Data Description, Data Analysis, Results/Discussion, and Conclusion --> Lucas/Katherine/Joyce.
+2. Quarto report including Title/Intro, Data Description, Data Analysis, Results/Discussion, and Conclusion --> Joyce/Katherine/Lucas. 
