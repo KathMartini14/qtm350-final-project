@@ -25,4 +25,4 @@ To run the code, you can either clone the repository into your own Github accoun
 - figures folder with plots and tables --> Katherine/Joyce
 - scripts folder with SQL and Python --> Joyce/Lucas
 
-2. Quarto report including Title/Intro, Data Description, Data Analysis, Results/Discussion, and Conclusion --> Joyce/Katherine/Lucas. 
+2. Quarto report including Title/Intro, Data Description, Data Analysis, Results/Discussion, and Conclusion --> Caleb.
