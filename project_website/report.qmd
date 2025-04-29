@@ -1,0 +1,975 @@
+---
+title: "QTM 350 Final Project Report"
+author:
+  - name: Caleb Sharkey (2514723)
+  - name: Katherine Martini (2549333)
+  - name: Joyce Chen (2485906)
+  - name: Lucas Lobo (2555247)
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    number-sections: true
+  pdf:
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    documentclass: article
+---
+
+# Introduction
+
+For this project, we will be investigating population dynamics from the Caribbean and Central and South America from 1975-2024. We are specifically interested in analyzing how indicators such as life expectancy, mortality rate, and adolescent fertility rate interact with one another. We will be utilizing data from the publicly availiable World Development Index (WDI) from the World Bank. We will use additional attributes like immunization (measles, DPT, HEPB3), HIV prevalence, urban and rural populations, unemployment rates, and surface area for a deeper look at our specified region's status and history. 
+
+### Central Question:
+
+**How do various health-related, economic, and geographic factors contribute towards and interact with life expectancy at birth, mortality rate, and adolescent fertility rate?**
+
+# Data Description
+
+We chose to focus on the 'population dynamics' research question within the [WDI Dataset](https://databank.worldbank.org/source/world-development-indicators). Specifically, we wanted to explored how various health-related, economic, and geographic factors contributed towards and interacted with life expectancy at birth, mortality rate, and adolescent fertility rate. Some of these factors (or 'services,' as named by the WDI) include immunization rates for DPT, HepB3, measles, prevalence of HIV, TB case detection rates, proportion of expenditure spent on health-related measures, urban and rural populations, unemployment rates, surface area, and rule of law estimates. To narrow our focus, we only included data from Central and South American countries: Argentina, Belize, Costa Rica, El Salvador, Guatemala, Honduras, Mexico, Nicaragua, Panama, Bolivia, Brazil, Chile, Colombia, Ecuador, Guyana, Paraguay, Peru, Suriname, Uruguay, Venezuela, Cuba, Dominican Republic, Haiti, Puerto Rico (territory), St. Martin. Finally, we included data from the past 50 years (1975-2024).
+
+# Data Cleaning and Preparation
+
+(Lucas)
+
+## Loading + Creating the Database.
+
+
+```{python}
+#| echo: true
+# Relevant packages:
+import sqlite3
+import pandas as pd
+
+# Loading the WDI data as a csv (using pandas):
+# Change relative path to your downloaded WDI data
+df = pd.read_csv("../data/wdi_rawdata.csv", encoding='latin1')
+
+# Created a database by running the following two commands in my terminal:
+
+## cd "C:\Users\lcsrl\Downloads"
+## touch qtm350_project.db
+
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
+# Set up connection:
+conn = sqlite3.connect("../data/qtm350_project.db")
+cursor = conn.cursor()
+
+# Write 'df' to SQL:
+cursor.execute("DROP TABLE IF EXISTS wdi;")
+df.to_sql('wdi', conn, if_exists='replace', index=False)
+```
+
+## Data Cleaning + Transformation:
+
+Off the bat, there are lots of oddly-named variables and warped data. We'll create a new cleaned table. We'll drop/modify N/A values (denoted as ..) according to the following procedures.
+
+```{python}
+#| echo: true
+#| results: 'hide'
+# new, cleaned dataframe
+# 1: create a new 'year' list (to replace the current format)
+year_columns = [
+    f'"{year} [YR{year}]" AS "{year}"' for year in range(1975, 2025)
+]
+
+# 2: new table only with relevant columns: country_name, indicator, and years 
+cursor.execute("DROP TABLE IF EXISTS wdi_renamed;")
+q_keep = f"""
+CREATE TABLE wdi_renamed AS
+SELECT 
+    "Country Name" AS country_name,
+    "Series Name" AS indicator,
+    {', '.join(year_columns)}
+FROM wdi
+"""
+conn.execute(q_keep)
+```
+
+```{python}
+#| echo: true
+pd.read_sql("SELECT * FROM wdi_renamed", conn).head()
+
+```
+
+**Sorting the countries into three regions as follows:**
+
+Central America (9 countries): 
+- Belize, Costa Rica, El Salvador, Guatemala, Honduras, Nicaragua, Panama, Mexico, Bolivia,
+
+South America (10 countries):
+- Argentina, Brazil, Chile, Colombia, Guyana, Paraguay, Peru, Suriname, Uruguay, Venezuela, RB.
+
+Caribbean (5 countries):
+- Dominican Republic, Haiti, Jamaica, St. Martin (French part), Puerto Rico.
+
+```{python}
+#| echo: true
+#| results: 'hide'
+conn.execute("DROP TABLE IF EXISTS wdi_region;")
+
+# writes an implicit 'if else' function in sql to create a new column 'region' based on the country name by using CASE WHEN/ELSE statements.
+q_region = """
+CREATE TABLE wdi_region AS
+SELECT 
+    country_name,
+    CASE
+        WHEN country_name IN (
+            'Belize', 'Costa Rica', 'El Salvador', 'Guatemala', 'Honduras', 'Nicaragua', 'Panama', 'Mexico', 'Bolivia'
+        ) THEN 'Central America'
+        WHEN country_name IN (
+            'Argentina', 'Brazil', 'Chile', 'Colombia', 'Ecuador', 'Guyana', 'Paraguay', 'Peru', 'Suriname', 'Uruguay', 'Venezuela, RB'
+        ) THEN 'South America'
+        WHEN country_name IN (
+            'Cuba', 'Dominican Republic', 'Haiti', 'Jamaica', 'St. Martin (French part)', 'Puerto Rico'
+        ) THEN 'Caribbean'
+        ELSE 'Other'
+    END AS region,
+    indicator,
+    "1975", "1976", "1977", "1978", "1979", "1980", "1981", "1982", "1983", "1984", "1985", "1986", "1987", "1988", "1989",
+    "1990", "1991", "1992", "1993", "1994", "1995", "1996", "1997", "1998", "1999", "2000", "2001", "2002", "2003", "2004", 
+    "2005", "2006", "2007", "2008", "2009", "2010", "2011", "2012", "2013", "2014", "2015", "2016", "2017", "2018", "2019",
+    "2020", "2021", "2022", "2023", "2024"
+FROM wdi_renamed
+"""
+
+conn.execute(q_region)
+```
+
+**We'll create a pivot table (long) in order to display each variable in each year by country.**
+
+```{python}
+#| echo: true
+#| results: 'hide'
+# SQL code that mimics 'melt' in python: iterates over each year and stores a list of queries
+year_range = range(1975, 2025)
+union_queries = []
+
+# creates a list of SQL commands
+# column order: year, country_name
+conn.execute("DROP TABLE IF EXISTS wdi_long;")
+for year in year_range:
+    union_queries.append(f"""
+    SELECT 
+        '{year}' AS year,
+        country_name,
+        region,
+        indicator,
+        "{year}" AS value
+    FROM wdi_region
+    WHERE "{year}" IS NOT NULL
+    """)
+
+# joins and executes each individual year using UNION ALL (basically stacks on top of each other)
+q_long = f"""
+CREATE TABLE wdi_long AS
+{'UNION ALL'.join(union_queries)}
+"""
+
+conn.execute(q_long)
+```
+
+Lots of information for various years is unavailable, perhaps because the country does not track certain info, they only started after a certain year, etc. We'll create a modified version of this pivot table to only include rows where the data is present
+
+
+```{python}
+#| echo: true
+conn.execute("DROP TABLE IF EXISTS wdi_long_clean;")
+q_filter_non_null = """
+CREATE TABLE wdi_long_clean AS
+SELECT *
+FROM wdi_long
+WHERE value IS NOT NULL AND value != '..'
+"""
+conn.execute(q_filter_non_null)
+
+# Here's a sample of the cleaned data:
+pd.read_sql("SELECT * FROM wdi_long_clean", conn).head(25)
+
+```
+
+## Descriptive Statistics (in SQL)
+
+**1. Top 10 Countries by Average Life Expectancy across various time periods:**
+
+- 1975-2024 (all years in dataset).
+
+- 1980-1989 (80s).
+
+- 2010-2019 (2010s).
+
+```{python}
+#| echo: true
+q1_a = """
+SELECT country_name, AVG(value) AS avg_life_exp
+FROM wdi_long_clean
+WHERE indicator = 'Life expectancy at birth, total (years)'
+GROUP BY country_name
+ORDER BY avg_life_exp DESC
+LIMIT 10
+"""
+q1_a_table = pd.read_sql(q1_a, conn)
+q1_a_table
+```
+
+```{python}
+#| echo: true
+q1_b = """
+SELECT country_name, AVG(value) AS avg_life_exp
+FROM wdi_long_clean
+WHERE indicator = 'Life expectancy at birth, total (years)'
+  AND year IN ('1980', '1981', '1982', '1983', '1984', '1985', '1986', '1987', '1988', '1989')
+GROUP BY country_name
+ORDER BY avg_life_exp DESC
+LIMIT 10
+"""
+q1_b_table = pd.read_sql(q1_b, conn)
+q1_b_table
+```
+
+```{python}
+#| echo: true
+q1_c = """
+SELECT country_name, AVG(value) AS avg_life_exp
+FROM wdi_long_clean
+WHERE indicator = 'Life expectancy at birth, total (years)'
+  AND year IN ('2010', '2011', '2012', '2013', '2014', '2015', '2016', '2017', '2018', '2019')
+GROUP BY country_name
+ORDER BY avg_life_exp DESC
+LIMIT 10
+"""
+q1_c_table = pd.read_sql(q1_c, conn)
+q1_c_table
+```
+
+**2. Highest rates of immunization for DPT, HepB3, and measles for each country:**
+
+In other words, the number in each cell represents the immunization rate that was highest for that country across the years in the dataset. We will also include a value 'agg_immunization_rate', which is computed by taking teh average of the three maximum immunization rates.
+
+```{python}
+#| echo: true
+q2 = """
+SELECT country_name,
+       MAX(CASE WHEN indicator = 'Immunization, DPT (% of children ages 12-23 months)' THEN value END) AS max_dpt,
+       MAX(CASE WHEN indicator = 'Immunization, HepB3 (% of one-year-old children)' THEN value END) AS max_hepb3,
+       MAX(CASE WHEN indicator = 'Immunization, measles (% of children ages 12-23 months)' THEN value END) AS max_measles,
+       (MAX(CASE WHEN indicator = 'Immunization, DPT (% of children ages 12-23 months)' THEN value END) +
+        MAX(CASE WHEN indicator = 'Immunization, HepB3 (% of one-year-old children)' THEN value END) +
+        MAX(CASE WHEN indicator = 'Immunization, measles (% of children ages 12-23 months)' THEN value END)) / 3 AS agg_immunization_rate
+FROM wdi_long_clean
+WHERE indicator IN (
+    'Immunization, DPT (% of children ages 12-23 months)',
+    'Immunization, HepB3 (% of one-year-old children)',
+    'Immunization, measles (% of children ages 12-23 months)'
+)
+GROUP BY country_name
+ORDER BY agg_immunization_rate DESC
+LIMIT 23;
+"""
+q2_table = pd.read_sql(q2, conn)
+q2_table
+```
+
+**3. Yearly change in urban population for Mexico and Brazil (two countries with generally high urban populations) from 1975 to 2000:**
+
+We will use the LAG() function in SQL, which allows us to access data from a previous row in the same result set without the use of a self-join, in order to calculate the difference between years.
+
+
+```{python}
+#| echo: true
+q3_a = """
+SELECT year, 
+  value AS urban_population,
+  value - LAG(value) OVER (ORDER BY year) AS yearly_growth
+FROM wdi_long_clean
+WHERE country_name = 'Mexico'
+  AND indicator = 'Urban population'
+  AND year BETWEEN '1975' AND '2000'
+ORDER BY year;
+"""
+q3_a_table = pd.read_sql(q3_a, conn)
+q3_a_table
+```
+
+```{python}
+#| echo: true
+q3_b = """
+SELECT year, 
+  value AS urban_population,
+  value - LAG(value) OVER (ORDER BY year) AS yearly_growth
+FROM wdi_long_clean
+WHERE country_name = 'Brazil'
+  AND indicator = 'Urban population'
+  AND year BETWEEN '1975' AND '2000'
+ORDER BY year;
+"""
+q3_b_table = pd.read_sql(q3_b, conn)
+q3_b_table
+```
+
+**4. Average trade amounts (as % of GDP) across 1975-2024, first by region, and second by country:**
+
+```{python}
+#| echo: true
+q4_a = """
+SELECT region,
+       AVG(value) AS avg_trade_gdp
+FROM wdi_long_clean
+WHERE indicator = 'Trade (% of GDP)'
+  AND CAST(year AS INTEGER) BETWEEN 1975 AND 2024
+GROUP BY region
+ORDER BY avg_trade_gdp DESC;
+"""
+q4_a_table = pd.read_sql(q4_a, conn)
+q4_a_table
+```
+
+```{python}
+#| echo: true
+q4_b = """
+SELECT country_name, region,
+       AVG(value) AS avg_trade_gdp
+FROM wdi_long_clean
+WHERE indicator = 'Trade (% of GDP)'
+  AND CAST(year AS INTEGER) BETWEEN 1975 AND 2024
+GROUP BY country_name, region
+ORDER BY avg_trade_gdp DESC
+LIMIT 24;
+"""
+q4_b_table = pd.read_sql(q4_b, conn)
+q4_b_table
+```
+
+
+# Exploratory Data Analysis
+
+```{python}
+#| echo: true
+import pandas as pd
+import numpy as np
+from scipy.stats import linregress
+import matplotlib.pyplot as plt
+import seaborn as sns
+```
+
+```{python}
+#| echo: true
+region_mapping = {
+    'Argentina': 'South America',
+    'Belize': 'Central America',
+    'Costa Rica': 'Central America',
+    'El Salvador': 'Central America',
+    'Guatemala': 'Central America',
+    'Honduras': 'Central America',
+    'Nicaragua': 'Central America',
+    'Panama': 'Central America',
+    'Mexico': 'Central America',
+    'Bolivia': 'South America',
+    'Brazil': 'South America',
+    'Chile': 'South America',
+    'Colombia': 'South America',
+    'Ecuador': 'South America',
+    'Guyana': 'South America',
+    'Paraguay': 'South America',
+    'Peru': 'South America',
+    'Suriname': 'South America',
+    'Uruguay': 'South America',
+    'Venezuela, RB': 'South America',
+    'Cuba': 'Caribbean',
+    'Dominican Republic': 'Caribbean',
+    'Haiti': 'Caribbean',
+    'Jamaica': 'Caribbean',
+    'St. Martin (French part)': 'Caribbean',
+    'Puerto Rico': 'Caribbean',
+}
+
+df['Region'] = df['Country Name'].map(region_mapping)
+```
+
+```{python}
+#| echo: true
+
+life_expectancy_df = df[df['Series Name'] == 'Life expectancy at birth, total (years)'].copy()
+year_columns = [col for col in df.columns if '[YR' in col]
+life_expectancy_df.loc[:, year_columns] = life_expectancy_df[year_columns].apply(pd.to_numeric, errors='coerce')
+life_expectancy_df['Average Life Expectancy'] = life_expectancy_df[year_columns].mean(axis=1)
+
+life_result = life_expectancy_df[['Region', 'Average Life Expectancy']]
+life_result = life_result.dropna(subset=['Average Life Expectancy'])
+life_result = life_result.groupby('Region')['Average Life Expectancy'].mean().reset_index()
+life_result = life_result.sort_values(by='Average Life Expectancy', ascending=False)
+print(life_result)
+```
+
+```{python}
+#| echo: true
+mortality_df = df[df['Series Name'] == 'Mortality rate, under-5 (per 1,000 live births)'].copy()
+mortality_df.loc[:, year_columns] = mortality_df[year_columns].apply(pd.to_numeric, errors='coerce')
+mortality_df['Average Mortality Under 5 yo'] = mortality_df[year_columns].mean(axis=1)
+
+mort_result = mortality_df[['Region', 'Average Mortality Under 5 yo']]
+mort_result = mort_result.dropna(subset=['Average Mortality Under 5 yo'])
+mort_result = mort_result.groupby('Region')['Average Mortality Under 5 yo'].mean().reset_index()
+mort_result = mort_result.sort_values(by='Average Mortality Under 5 yo', ascending=False)
+print(mort_result)
+```
+
+```{python}
+#| echo: true
+fertility_df = df[df['Series Name'] == 'Adolescent fertility rate (births per 1,000 women ages 15-19)'].copy()
+fertility_df.loc[:, year_columns] = fertility_df[year_columns].apply(pd.to_numeric, errors='coerce')
+fertility_df['Average Fertility Rate'] = fertility_df[year_columns].mean(axis=1)
+
+fertility_result = fertility_df[['Region', 'Average Fertility Rate']]
+fertility_result = fertility_result.dropna(subset=['Average Fertility Rate'])
+fertility_result = fertility_result.groupby('Region')['Average Fertility Rate'].mean().reset_index()
+fertility_result = fertility_result.sort_values(by='Average Fertility Rate', ascending=False)
+print(fertility_result)
+```
+
+
+```{python}
+#| echo: true
+immunization_group = [
+    'Immunization, DPT (% of children ages 12-23 months)',
+    'Immunization, HepB3 (% of one-year-old children)',
+    'Immunization, measles (% of children ages 12-23 months)'
+]
+
+immunization_df = df[df['Series Name'].isin(immunization_group)].copy()
+immunization_df.loc[:, year_columns] = immunization_df[year_columns].apply(pd.to_numeric, errors='coerce')
+immunization_df['Grouped Immunization Average'] = immunization_df[year_columns].mean(axis=1)
+
+immune_result = immunization_df[['Region', 'Grouped Immunization Average']]
+immune_result = immune_result.dropna(subset=['Grouped Immunization Average'])
+immune_result = immune_result.groupby('Region')['Grouped Immunization Average'].mean().reset_index()
+immune_result = immune_result.sort_values(by='Grouped Immunization Average', ascending=False)
+print(immune_result)
+```
+
+```{python}
+#| echo: true
+health_df = df[df['Series Name'] == 'Current health expenditure (% of GDP)'].copy()
+health_df.loc[:, year_columns] = health_df[year_columns].apply(pd.to_numeric, errors='coerce')
+health_df['Average Health Expenditure'] = health_df[year_columns].mean(axis=1)
+
+health_result = health_df[['Region', 'Average Health Expenditure']]
+health_result = health_result.dropna(subset=['Average Health Expenditure'])
+health_result = health_result.groupby('Region')['Average Health Expenditure'].mean().reset_index()
+health_result = health_result.sort_values(by='Average Health Expenditure', ascending=False)
+print(health_result)
+```
+
+```{python}
+#| echo: true
+ranking_merge = life_result.merge(mort_result, on='Region')
+ranking_merge = ranking_merge.merge(fertility_result, on='Region')
+ranking_merge = ranking_merge.merge(immune_result, on='Region')
+ranking_merge = ranking_merge.merge(health_result, on='Region')
+
+ranking_merge['Life Expectancy Rank'] = ranking_merge['Average Life Expectancy'].rank(ascending=False).astype(int)
+ranking_merge['Mortality Rank'] = ranking_merge['Average Mortality Under 5 yo'].rank(ascending=True).astype(int)
+ranking_merge['Grouped Immunization Rank'] = ranking_merge['Grouped Immunization Average'].rank(ascending=False).astype(int)
+ranking_merge['Health Expenditure Rank'] = ranking_merge['Average Health Expenditure'].rank(ascending=False).astype(int)
+ranking_merge['Fertility Rank'] = ranking_merge['Average Fertility Rate'].rank(ascending=True).astype(int)
+
+ranking_result = ranking_merge[['Region', 
+                            'Life Expectancy Rank', 
+                            'Mortality Rank', 
+                            'Grouped Immunization Rank', 
+                            'Health Expenditure Rank', 
+                            'Fertility Rank']]
+
+```
+
+```{python}
+#| echo: true
+fig, ax = plt.subplots(figsize=(16, 4))  #
+ax.axis('off')
+
+table = ax.table(
+    cellText=ranking_result.values,
+    colLabels=ranking_result.columns,
+    cellLoc='center',
+    loc='center'
+)
+
+table.auto_set_font_size(False)
+table.set_fontsize(12)
+plt.savefig('health_region_ranking.png', bbox_inches='tight', dpi=150)
+```
+
+```{python}
+#| echo: true
+# Define a function to find the highest and lowest values for a given metric
+def analyze_metric(df, metric_name):
+    metric_df = df[df['Series Name'] == metric_name].copy()
+    year_columns = [col for col in df.columns if '[YR' in col]
+    metric_df.loc[:, year_columns] = metric_df[year_columns].apply(pd.to_numeric, errors='coerce')
+    metric_df['Average Value'] = metric_df[year_columns].mean(axis=1)
+    
+    # Group by region and find the highest and lowest values
+    grouped = metric_df.groupby('Region')
+    highest = grouped.apply(lambda x: x.loc[x['Average Value'].idxmax(), ['Country Name', 'Average Value']])
+    lowest = grouped.apply(lambda x: x.loc[x['Average Value'].idxmin(), ['Country Name', 'Average Value']])
+    
+    return highest, lowest
+```
+
+```{python}
+#| echo: true
+# 1. Life expectancy at birth, total (years)
+life_expectancy_highest, life_expectancy_lowest = analyze_metric(
+    df, 'Life expectancy at birth, total (years)'
+)
+print("Life Expectancy (Highest):")
+print(life_expectancy_highest)
+print("\nLife Expectancy (Lowest):")
+print(life_expectancy_lowest)
+```
+
+```{python}
+#| echo: true
+# 2. Mortality rate, under-5 (per 1,000 live births)
+mortality_highest, mortality_lowest = analyze_metric(
+    df, 'Mortality rate, under-5 (per 1,000 live births)'
+)
+print("\nMortality Rate (Highest):")
+print(mortality_highest)
+print("\nMortality Rate (Lowest):")
+print(mortality_lowest)
+```
+
+```{python}
+#| echo: true
+# 3. Adolescent fertility rate (births per 1,000 women ages 15-19)
+fertility_highest, fertility_lowest = analyze_metric(
+    df, 'Adolescent fertility rate (births per 1,000 women ages 15-19)'
+)
+print("\nAdolescent Fertility Rate (Highest):")
+print(fertility_highest)
+print("\nAdolescent Fertility Rate (Lowest):")
+print(fertility_lowest)
+```
+
+```{python}
+#| echo: true
+# Filter the dataset for the three variables
+life_expectancy = df[df['Series Name'] == 'Life expectancy at birth, total (years)'].copy()
+mortality_rate = df[df['Series Name'] == 'Mortality rate, under-5 (per 1,000 live births)'].copy()
+fertility_rate = df[df['Series Name'] == 'Adolescent fertility rate (births per 1,000 women ages 15-19)'].copy()
+
+# Extract year columns and calculate averages
+year_columns = [col for col in map(str, df.columns) if '[YR' in col]
+
+# Calculate the average values for each variable
+life_expectancy['Average Value'] = life_expectancy[year_columns].apply(pd.to_numeric, errors='coerce').mean(axis=1)
+mortality_rate['Average Value'] = mortality_rate[year_columns].apply(pd.to_numeric, errors='coerce').mean(axis=1)
+fertility_rate['Average Value'] = fertility_rate[year_columns].apply(pd.to_numeric, errors='coerce').mean(axis=1)
+
+# Merge the datasets on 'Country Name' for scatterplots
+merged_df = life_expectancy[['Country Name', 'Average Value']].merge(
+    mortality_rate[['Country Name', 'Average Value']],
+    on='Country Name',
+    suffixes=('_LifeExpectancy', '_MortalityRate')
+).merge(
+    fertility_rate[['Country Name', 'Average Value']],
+    on='Country Name'
+)
+merged_df.rename(columns={'Average Value': 'AdolescentFertilityRate'}, inplace=True)
+```
+
+```{python}
+#| echo: true
+# Ensure no NaN values in the data for each scatterplot
+valid_data1 = merged_df[['Average Value_LifeExpectancy', 'Average Value_MortalityRate']].dropna()
+x1 = valid_data1['Average Value_LifeExpectancy']
+y1 = valid_data1['Average Value_MortalityRate']
+
+valid_data2 = merged_df[['Average Value_LifeExpectancy', 'AdolescentFertilityRate']].dropna()
+x2 = valid_data2['Average Value_LifeExpectancy']
+y2 = valid_data2['AdolescentFertilityRate']
+
+valid_data3 = merged_df[['Average Value_MortalityRate', 'AdolescentFertilityRate']].dropna()
+x3 = valid_data3['Average Value_MortalityRate']
+y3 = valid_data3['AdolescentFertilityRate']
+```
+
+```{python}
+#| echo: true
+# Scatterplot 1: Life Expectancy vs Mortality Rate with regression line
+slope1, intercept1, r_value1, p_value1, std_err1 = linregress(x1, y1)
+plt.figure(figsize=(8, 6))
+plt.scatter(x1, y1, alpha=0.7, label='Data Points')
+plt.plot(x1, slope1 * x1 + intercept1, color='red', label=f'Best Fit Line (R²={r_value1**2:.2f})')
+plt.title('Life Expectancy vs Mortality Rate')
+plt.xlabel('Life Expectancy (years)')
+plt.ylabel('Mortality Rate (per 1,000 live births)')
+plt.legend()
+plt.grid(True)
+plt.show()
+```
+
+```{python}
+#| echo: true
+# Scatterplot 2: Life Expectancy vs Adolescent Fertility Rate with regression line
+x2 = merged_df['Average Value_LifeExpectancy']
+y2 = merged_df['AdolescentFertilityRate']
+slope2, intercept2, r_value2, p_value2, std_err2 = linregress(x2, y2)
+
+plt.figure(figsize=(8, 6))
+plt.scatter(x2, y2, alpha=0.7, label='Data Points')
+plt.plot(x2, slope2 * x2 + intercept2, color='red', label=f'Best Fit Line (R²={r_value2**2:.2f})')
+plt.title('Life Expectancy vs Adolescent Fertility Rate')
+plt.xlabel('Life Expectancy (years)')
+plt.ylabel('Adolescent Fertility Rate (per 1,000 women)')
+plt.legend()
+plt.grid(True)
+plt.show()
+```
+
+```{python}
+#| echo: true
+# Scatterplot 3: Mortality Rate vs Adolescent Fertility Rate with regression line
+slope3, intercept3, r_value3, p_value3, std_err3 = linregress(x3, y3)
+plt.figure(figsize=(8, 6))
+plt.scatter(x3, y3, alpha=0.7, label='Data Points')
+plt.plot(x3, slope3 * x3 + intercept3, color='red', label=f'Best Fit Line (R²={r_value3**2:.2f})')
+plt.title('Mortality Rate vs Adolescent Fertility Rate')
+plt.xlabel('Mortality Rate (per 1,000 live births)')
+plt.ylabel('Adolescent Fertility Rate (per 1,000 women)')
+plt.legend()
+plt.grid(True)
+plt.show()
+```
+
+In order to do analysis on the data and comparing the countries within these regions to one another, need to modify the dataframes previously created. This will help in making visualizations easier.
+
+```{python}
+#| echo: true
+#Life expectancy
+life_expectancy_df = df[df['Series Name'] == 'Life expectancy at birth, total (years)'].copy()
+year_columns = [col for col in df.columns if '[YR' in col]
+life_expectancy_df.loc[:, year_columns] = life_expectancy_df[year_columns].apply(pd.to_numeric, errors='coerce')
+life_result = life_expectancy_df.groupby(['Country Name', 'Region'])[year_columns].mean().reset_index()
+life_result['Average Life Expectancy'] = life_result[year_columns].mean(axis=1)
+life_result = life_result[['Region', 'Country Name', 'Average Life Expectancy']]
+
+#Mortality Rate
+mortality_df = df[df['Series Name'] == 'Mortality rate, under-5 (per 1,000 live births)'].copy()
+mortality_df.loc[:, year_columns] = mortality_df[year_columns].apply(pd.to_numeric, errors='coerce')
+mort_result = mortality_df.groupby(['Country Name', 'Region'])[year_columns].mean().reset_index()
+mort_result['Average Mortality Under 5 yo'] = mort_result[year_columns].mean(axis=1)
+mort_result = mort_result[['Region', 'Country Name', 'Average Mortality Under 5 yo']]
+
+#Fertility Rate
+fertility_df = df[df['Series Name'] == 'Adolescent fertility rate (births per 1,000 women ages 15-19)'].copy()
+fertility_df.loc[:, year_columns] = fertility_df[year_columns].apply(pd.to_numeric, errors='coerce')
+fertility_result = fertility_df.groupby(['Country Name', 'Region'])[year_columns].mean().reset_index()
+fertility_result['Average Fertility Rate'] = fertility_result[year_columns].mean(axis=1)
+fertility_result = fertility_result[['Region', 'Country Name', 'Average Fertility Rate']]
+
+#merge the dfs
+combined = life_result.merge(mort_result, on=['Country Name', 'Region'])
+combined = combined.merge(fertility_result, on=['Country Name', 'Region'])
+```
+
+Now let's add two additional dataframes to work with to get better insight into health indicators:
+
+
+```{python}
+#| echo: true
+immunization_group = [
+    'Immunization, DPT (% of children ages 12-23 months)',
+    'Immunization, HepB3 (% of one-year-old children)',
+    'Immunization, measles (% of children ages 12-23 months)'
+]
+immunization_df = df[df['Series Name'].isin(immunization_group)].copy()
+immunization_df.loc[:, year_columns] = immunization_df[year_columns].apply(pd.to_numeric, errors='coerce')
+immune_result = immunization_df.groupby(['Country Name', 'Region'])[year_columns].mean().reset_index()
+immune_result['Grouped Immunization Average'] = immune_result[year_columns].mean(axis=1)
+immune_result = immune_result[['Region', 'Country Name', 'Grouped Immunization Average']]
+
+health_df = df[df['Series Name'] == 'Current health expenditure (% of GDP)'].copy()
+health_df.loc[:, year_columns] = health_df[year_columns].apply(pd.to_numeric, errors='coerce')
+health_result = health_df.groupby(['Country Name', 'Region'])[year_columns].mean().reset_index()
+health_result['Average Health Expenditure'] = health_result[year_columns].mean(axis=1)
+health_result = health_result[['Region', 'Country Name', 'Average Health Expenditure']]
+```
+
+```{python}
+#| echo: true
+south_america_df = combined[combined['Region'] == 'South America']
+
+heatmap = south_america_df[['Country Name', 
+                            'Average Life Expectancy', 
+                            'Average Fertility Rate', 
+                            'Average Mortality Under 5 yo']]
+
+heatmap = heatmap.set_index('Country Name')
+heatmap = heatmap.apply(pd.to_numeric, errors='coerce')
+
+
+
+plt.figure(figsize=(12, 8))
+sns.heatmap(heatmap, annot=True, cmap="YlGnBu", fmt=".1f")
+plt.title('Health Metrics Heatmap for South America')
+plt.xlabel('Health Metric')
+plt.ylabel('Country')
+```
+
+```{python}
+#| echo: true
+central_america_df = combined[combined['Region'] == 'Central America']
+
+heatmap = central_america_df[['Country Name', 
+                            'Average Life Expectancy', 
+                            'Average Fertility Rate', 
+                            'Average Mortality Under 5 yo']]
+
+heatmap = heatmap.set_index('Country Name')
+heatmap = heatmap.apply(pd.to_numeric, errors='coerce')
+
+
+
+plt.figure(figsize=(12, 8))
+sns.heatmap(heatmap, annot=True, cmap="YlGnBu", fmt=".1f")
+plt.title('Health Metrics Heatmap for Central America')
+plt.xlabel('Health Metric')
+plt.ylabel('Country')
+```
+
+The heatmaps show the breakdown of each South and Central American country and their
+average for the following metrics. The darker the color indicates the higher the frequency for
+that certain attribute. This graph is able to display the countries in these regions that relate to
+mortality, life expectancy and fertility rates. Additionally, there is a table that ranks the
+Caribbean region along with the south and central American regions based on the five metrics
+listed in the table. By looking at this, we are able to see an overall ranking of which region has
+high mortality, low fertility, etc. This was further evaluated in the analysis by looking at each
+individual metric and comparing it with the regions.
+
+```{python}
+#| echo: true
+
+# Dropping NA values in the dataframe
+fertility_result = fertility_result.dropna(subset=['Average Fertility Rate'])
+immune_result = immune_result.dropna(subset=['Grouped Immunization Average'])
+life_result = life_result.dropna(subset=['Average Life Expectancy'])
+mort_result = mort_result.dropna(subset=['Average Mortality Under 5 yo'])
+health_result = health_result.dropna(subset=['Average Health Expenditure'])
+```
+
+```{python}
+#| echo: true
+ranking_merge = life_result.merge(mort_result, on=['Region','Country Name'])
+ranking_merge = ranking_merge.merge(fertility_result, on=['Region','Country Name'])
+ranking_merge = ranking_merge.merge(immune_result, on=['Region','Country Name'])
+ranking_merge = ranking_merge.merge(health_result, on=['Region','Country Name'])
+
+ranking_merge['Life Expectancy Rank'] = ranking_merge['Average Life Expectancy'].rank(ascending=False).astype(int)
+ranking_merge['Mortality Rank'] = ranking_merge['Average Mortality Under 5 yo'].rank(ascending=True).astype(int)
+ranking_merge['Grouped Immunization Rank'] = ranking_merge['Grouped Immunization Average'].rank(ascending=False).astype(int)
+ranking_merge['Health Expenditure Rank'] = ranking_merge['Average Health Expenditure'].rank(ascending=False).astype(int)
+ranking_merge['Fertility Rank'] = ranking_merge['Average Fertility Rate'].rank(ascending=True).astype(int)
+
+ranking_result = ranking_merge[['Region', 
+                            'Life Expectancy Rank', 
+                            'Mortality Rank', 
+                            'Grouped Immunization Rank', 
+                            'Health Expenditure Rank', 
+                            'Fertility Rank']]
+
+fig, ax = plt.subplots(figsize=(16, 4))  #
+ax.axis('off')
+
+table = ax.table(
+    cellText=ranking_result.values,
+    colLabels=ranking_result.columns,
+    cellLoc='center',
+    loc='center'
+)
+
+table.auto_set_font_size(False)
+table.set_fontsize(12)
+plt.savefig('health_region_ranking.png', bbox_inches='tight', dpi=150)
+```
+
+```{python}
+#| echo: true
+# Fix year columns
+year_columns = [col for col in df.columns if '[YR' in col]
+
+# Melt from wide to long format
+df_long = df.melt(
+    id_vars=['Country Name', 'Country Code', 'Region', 'Series Name', 'Series Code'],
+    value_vars=year_columns,
+    var_name='Year',
+    value_name='Value'
+)
+
+# Clean Year (remove [YRxxxx] formatting)
+df_long['Year'] = df_long['Year'].str.extract('(\d+)').astype(int)
+
+# Clean Value: Turn '..' into NaN, ensure numeric
+df_long['Value'] = pd.to_numeric(df_long['Value'], errors='coerce')
+
+# Now your structure is:
+# Country Name | Country Code | Region | Series Name | Series Code | Year | Value
+print(df_long.head())
+```
+
+```{python}
+#| echo: true
+# Filter only Life Expectancy
+life_exp = df_long[df_long['Series Name'] == 'Life expectancy at birth, total (years)'].copy()
+
+# Group by Region and Year, and take average across countries
+region_life_exp = life_exp.groupby(['Region', 'Year'])['Value'].mean().reset_index()
+
+# Plot
+plt.figure(figsize=(10,8))
+sns.lineplot(
+    data=region_life_exp,
+    x='Year',
+    y='Value',
+    hue='Region',
+    marker='o'
+)
+
+plt.title('Average Life Expectancy Over Time by Region')
+plt.xlabel('Year')
+plt.ylabel('Life Expectancy (years)')
+plt.grid(True)
+plt.legend(title='Region')
+plt.show()
+
+```
+
+```{python}
+#| echo: true
+# Filter only Mortality Rate
+mortality = df_long[df_long['Series Name'] == 'Mortality rate, under-5 (per 1,000 live births)'].copy()
+
+# Group by Region and Year, and average across countries
+region_mortality = mortality.groupby(['Region', 'Year'])['Value'].mean().reset_index()
+
+# Plot
+plt.figure(figsize=(10,8))
+sns.lineplot(
+    data=region_mortality,
+    x='Year',
+    y='Value',
+    hue='Region',
+    marker='o'
+)
+
+plt.title('Average Mortality Rate (Under-5) Over Time by Region')
+plt.xlabel('Year')
+plt.ylabel('Mortality Rate (per 1,000 live births)')
+plt.grid(True)
+plt.legend(title='Region')
+plt.show()
+```
+
+```{python}
+#| echo: true
+# Investigating sharp spikes for Caribbean region
+
+# Step 1: Focus on Caribbean mortality
+caribbean_mortality = mortality[mortality['Region'] == 'Caribbean'].copy()
+caribbean_life_exp = life_exp[life_exp['Region'] == 'Caribbean'].copy()
+
+# Step 2: Choose a suspicious year range (e.g., 2000-2024)
+suspect_mort_years = caribbean_mortality[(caribbean_mortality['Year'] >= 2009) & (caribbean_mortality['Year'] <= 2011)]
+suspect_life_years = caribbean_life_exp[(caribbean_life_exp['Year'] >= 2009) & (caribbean_life_exp['Year'] <= 2011)]
+
+
+# Step 3: See country-level stats year by year
+pivot_mort = suspect_mort_years.pivot_table(
+    index='Year',
+    columns='Country Name',
+    values='Value'
+)
+
+pivot_life = suspect_life_years.pivot_table(
+    index='Year',
+    columns='Country Name',
+    values='Value'
+)
+
+print(pivot_mort)
+print(pivot_life)
+```
+
+It seems there was something that affected Haiti's life expectancy and mortality in 2010. After doing research, we found out that a catastrophic earthquake decimated Haiti, killing over 200,000 people.
+
+```{python}
+#| echo: true
+# Filter only Adolescent Fertility Rate
+adolescent_fertility = df_long[df_long['Series Name'] == 'Adolescent fertility rate (births per 1,000 women ages 15-19)'].copy()
+
+# Group by Region and Year, and average across countries
+region_adolescent_fertility = adolescent_fertility.groupby(['Region', 'Year'])['Value'].mean().reset_index()
+
+# Plot
+plt.figure(figsize=(10,8))
+sns.lineplot(
+    data=region_adolescent_fertility,
+    x='Year',
+    y='Value',
+    hue='Region',
+    marker='o'
+)
+
+plt.title('Average Adolescent Fertility Rate Over Time by Region')
+plt.xlabel('Year')
+plt.ylabel('Adolescent Fertility Rate (births per 1,000 women ages 15-19)')
+plt.grid(True)
+plt.legend(title='Region')
+plt.show()
+```
+
+
+
+```{python}
+#| echo: true
+
+```
+
+# Results and Discussion
+
+For data analysis, we analyzed 5 certain metrics and compared the 3 regions to one another. The
+first was average life expectancy, where the Caribbean had the highest with ~ 70 years and the
+lowest being Central America with ~68 years old. This metric showed us that generally, these
+regions had fairly similar life expectancies. For Average mortality, that is where we begin to see
+a disparity between the regions. For example, the Caribbean exhibits a high mortality under 5
+years old, around 61%, whereas Central and South America are both around 40%. For average
+fertility rates, Central America has the highest fertility rate, with the Caribbean being the lowest.
+Now, I looked at group immunization averages, which included DPT, measles, and HEPB3. It
+was mentioned that Central America had the highest, with Caribbean being the lowest. This
+could be due to the fact that Central America does have a higher fertility rate, and these
+immunizations were the % of children around the ages of 1-2. Finally, the last metric observed
+was average health expenditure. The region that utilizes on average the most for health
+expenditure is Central America, with again the Caribbean being the lowest.
+
+
+
+# Conclusion
+
+Ultimately, we found 
+
+Summarize:
+- Main findings across indicators
+- Regional differences
+- Potential social or policy implications
+
+# References
+
+World Bank's website:
+(https://databank.worldbank.org/source/world-development-indicators)
+
+World Bank's API documnetation:
+(https://github.com/tgherzog/wbgapi)
