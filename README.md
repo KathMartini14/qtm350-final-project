@@ -25,4 +25,6 @@ To run the code, you can either clone the repository into your own Github accoun
 - figures folder with plots and tables --> Katherine/Joyce
 - scripts folder with SQL and Python --> Joyce/Lucas
 
-2. Quarto report including Title/Intro, Data Description, Data Analysis, Results/Discussion, and Conclusion --> Joyce/Katherine/Lucas. 
+2. Quarto report including Title/Intro, Data Description, Data Analysis, Results/Discussion, and Conclusion --> Caleb.
+
+Note on Github management: we found it easiest for the sake of the project to work out of one branch (main) and add/update files as they are processed. As a result, there was very little merging performed, since we were all shared contributors on the repository that Katherine set up. When we committed new files/updates, we tried to add specific comments, either in the main description or the extended description.
