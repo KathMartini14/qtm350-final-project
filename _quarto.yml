@@ -15,3 +15,5 @@ format:
     toc: true          
     toc-depth: 2       
     number-sections: true
+
+output-dir: docs
